@@ -1,0 +1,18 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
+
+namespace Infrastructure.Persistence;
+
+public class ApplicationDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
+{
+    public ApplicationDbContext CreateDbContext(string[] args)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<ApplicationDbContext>();
+
+        // ׁÞִָ עג³י connection string הכÿ ל³דנאצ³י:
+        optionsBuilder.UseSqlServer(
+            "Server=localhost;Database=CarsShopDb;Trusted_Connection=True;TrustServerCertificate=True;");
+
+        return new ApplicationDbContext(optionsBuilder.Options);
+    }
+}

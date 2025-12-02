@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using Api;
-using Api.Dtos;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Xunit;
 
 namespace Api.Tests.Integration;
 
@@ -19,7 +19,8 @@ public class CarsEndpointSmokeTests : IClassFixture<WebApplicationFactory<Progra
     public async Task GetCars_ShouldReturnSuccessStatusCode()
     {
         var response = await _client.GetAsync("/api/cars");
-        // Endpoint should exist; whether it returns data or empty collection is not important for smoke test
+
+        // Endpoint маЇ ≥снувати; чи повертаЇ дан≥, чи пустий список Ц не критично дл€ smoke-тесту
         Assert.True(
             response.StatusCode == HttpStatusCode.OK ||
             response.StatusCode == HttpStatusCode.Unauthorized);

@@ -19,13 +19,10 @@ public class BasicApiTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task AuthToken_ShouldReturn_AccessToken()
     {
-        // Arrange
         var request = new { Username = "admin", Password = "Password123!" };
 
-        // Act
         var response = await _client.PostAsJsonAsync("/api/auth/token", request);
 
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var jsonString = await response.Content.ReadAsStringAsync();
@@ -36,10 +33,8 @@ public class BasicApiTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task GetCars_WithoutToken_ShouldReturn_Unauthorized()
     {
-        // Act
         var response = await _client.GetAsync("/api/cars");
 
-        // Assert
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }

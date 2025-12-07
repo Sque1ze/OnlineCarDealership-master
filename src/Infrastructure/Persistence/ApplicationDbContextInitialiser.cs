@@ -11,11 +11,16 @@ public class ApplicationDbContextInitialiser(
     {
         try
         {
+            if (!dbContext.Database.IsRelational())
+            {
+                return;
+            }
+
             await dbContext.Database.MigrateAsync();
         }
-        catch (Exception exception)
+        catch (Exception ex)
         {
-            logger.LogError(exception, "An error occurred while initialising the database.");
+            logger.LogError(ex, "An error occurred while initialising the database.");
             throw;
         }
     }

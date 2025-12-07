@@ -1,117 +1,276 @@
-﻿using System.Net;
-using System.Net.Http.Headers;
+﻿using Api.Dtos;
+using Domain.Categories;
+using FluentAssertions;
+using LanguageExt.Pipes;
+using Microsoft.EntityFrameworkCore;
+using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
-using Api;
-using Microsoft.AspNetCore.Mvc.Testing;
+using Tests.Common;
+using Tests.Data.Categories;
 using Xunit;
 
 namespace Api.Tests.Integration.Categories;
 
-public class CategoriesControllerTests : IClassFixture<WebApplicationFactory<Program>>
+public class CategoriesControllerTests : BaseIntegrationTest, IAsyncLifetime
 {
-    private readonly HttpClient _client;
+    private const string BaseRoute = "/api/categories";
 
-    public CategoriesControllerTests(WebApplicationFactory<Program> factory)
+    private readonly Category _firstTestCategory = CategoriesData.FirstTestCategory();
+    private readonly Category _secondTestCategory = CategoriesData.SecondTestCategory();
+
+    private string DetailRoute => $"{BaseRoute}/{_firstTestCategory.Id.Value}";
+
+    public CategoriesControllerTests(IntegrationTestWebFactory factory)
+        : base(factory)
     {
-        _client = factory.CreateClient();
     }
 
-    private async Task AuthenticateAsync()
-    {
-        var request = new { Username = "admin", Password = "Password123!" };
-
-        var response = await _client.PostAsJsonAsync("/api/auth/token", request);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-        var token = json.GetProperty("access_token").GetString();
-
-        _client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", token);
-    }
+    // ---------- GET ----------
 
     [Fact]
-    public async Task GetCategories_ShouldReturnOk()
+    public async Task ShouldGetAllCategories()
     {
-        // Arrange
-        await AuthenticateAsync();
-
         // Act
-        var response = await _client.GetAsync("/api/categories");
+        var response = await Client.GetAsync(BaseRoute);
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/json",
-            response.Content.Headers.ContentType?.MediaType);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var categories = await response.ToResponseModel<List<CategoryDto>>();
+
+        categories.Should().NotBeEmpty();
+        categories.Should().Contain(c => c.Name == _firstTestCategory.Name);
+
+        var category = categories.First();
+        category.Id.Should().Be(_firstTestCategory.Id.Value);
+        category.Name.Should().Be(_firstTestCategory.Name);
     }
 
     [Fact]
-    public async Task CreateCategory_ShouldReturnCreated_AndContainName()
+    public async Task ShouldGetCategoryById()
     {
-        // Arrange
-        await AuthenticateAsync();
-
-        var dto = new { name = $"Electric_{Guid.NewGuid()}" };
-
         // Act
-        var response = await _client.PostAsJsonAsync("/api/categories", dto);
+        var response = await Client.GetAsync(DetailRoute);
 
         // Assert
-        Assert.True(
-            response.StatusCode == HttpStatusCode.Created ||
-            response.StatusCode == HttpStatusCode.OK,
-            $"Expected 201 or 200, got {response.StatusCode}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-
-        var returnedName = json.GetProperty("name").GetString();
-        Assert.Equal(dto.name, returnedName);
-
-        var id = json.GetProperty("id").GetGuid();
-        Assert.NotEqual(Guid.Empty, id);
+        var dto = await response.ToResponseModel<CategoryDto>();
+        dto.Id.Should().Be(_firstTestCategory.Id.Value);
+        dto.Name.Should().Be(_firstTestCategory.Name);
+        dto.CreatedAt.Should().BeCloseTo(_firstTestCategory.CreatedAt, TimeSpan.FromSeconds(2));
+        dto.UpdatedAt.Should().Be(_firstTestCategory.UpdatedAt);
     }
 
     [Fact]
-    public async Task CreateCategory_WithEmptyName_ShouldReturnBadRequest()
+    public async Task ShouldReturnNotFound_WhenCategoryDoesNotExist()
     {
         // Arrange
-        await AuthenticateAsync();
-
-        var dto = new { name = "" };
+        var route = $"{BaseRoute}/{Guid.NewGuid()}";
 
         // Act
-        var response = await _client.PostAsJsonAsync("/api/categories", dto);
+        var response = await Client.GetAsync(route);
 
         // Assert
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // ---------- POST ----------
+
+    [Fact]
+    public async Task ShouldCreateCategory()
+    {
+        // Arrange
+        var request = new CreateCategoryDto("Hatchback");
+
+        // Act
+        var response = await Client.PostAsJsonAsync(BaseRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var dto = await response.ToResponseModel<CategoryDto>();
+        dto.Id.Should().NotBe(Guid.Empty);
+        dto.Name.Should().Be("Hatchback");
+
+        var dbCategory = await Context.Categories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id.Value == dto.Id);
+
+        dbCategory.Should().NotBeNull();
+        dbCategory!.Name.Should().Be("Hatchback");
     }
 
     [Fact]
-    public async Task GetCategory_ByNonExistingId_ShouldReturnNotFound()
+    public async Task ShouldNotCreateCategory_WithEmptyName()
     {
         // Arrange
-        await AuthenticateAsync();
+        var request = new CreateCategoryDto("");
 
+        // Act
+        var response = await Client.PostAsJsonAsync(BaseRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ShouldNotCreateCategory_WithTooLongName()
+    {
+        // Arrange
+        var longName = new string('a', 256); // > 255
+        var request = new CreateCategoryDto(longName);
+
+        // Act
+        var response = await Client.PostAsJsonAsync(BaseRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ShouldCreateCategory_WithMaxAllowedNameLength()
+    {
+        // Arrange
+        var maxName = new string('a', 255);
+        var request = new CreateCategoryDto(maxName);
+
+        // Act
+        var response = await Client.PostAsJsonAsync(BaseRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var dto = await response.ToResponseModel<CategoryDto>();
+        dto.Name.Should().Be(maxName);
+    }
+
+    // ---------- PUT ----------
+
+    [Fact]
+    public async Task ShouldUpdateCategory()
+    {
+        // Arrange
+        var request = new UpdateCategoryDto("Updated category name");
+
+        // Act
+        var response = await Client.PutAsJsonAsync(DetailRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var dto = await response.ToResponseModel<CategoryDto>();
+        dto.Name.Should().Be("Updated category name");
+        dto.UpdatedAt.Should().NotBeNull();
+
+        var dbCategory = await Context.Categories
+            .AsNoTracking()
+            .FirstAsync(x => x.Id == _firstTestCategory.Id);
+
+        dbCategory.Name.Should().Be("Updated category name");
+        dbCategory.UpdatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ShouldReturnNotFound_WhenUpdatingNonExistingCategory()
+    {
+        // Arrange
         var id = Guid.NewGuid();
+        var route = $"{BaseRoute}/{id}";
+        var request = new UpdateCategoryDto("Name");
 
         // Act
-        var response = await _client.GetAsync($"/api/categories/{id}");
+        var response = await Client.PutAsJsonAsync(route, request);
 
         // Assert
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
-    public async Task DeleteCategory_WithInvalidGuid_ShouldReturnNotFound()
+    public async Task ShouldNotUpdateCategory_WithEmptyName()
     {
         // Arrange
-        await AuthenticateAsync();
+        var request = new UpdateCategoryDto("");
 
         // Act
-        var response = await _client.DeleteAsync("/api/categories/not-a-guid");
+        var response = await Client.PutAsJsonAsync(DetailRoute, request);
 
         // Assert
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ShouldNotUpdateCategory_WithTooLongName()
+    {
+        // Arrange
+        var longName = new string('a', 256);
+        var request = new UpdateCategoryDto(longName);
+
+        // Act
+        var response = await Client.PutAsJsonAsync(DetailRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ShouldNotUpdateCategory_WithExistingName()
+    {
+        // Arrange
+        await Context.Categories.AddAsync(_secondTestCategory);
+        await SaveChangesAsync();
+
+        var request = new UpdateCategoryDto(_secondTestCategory.Name);
+
+        // Act
+        var response = await Client.PutAsJsonAsync(DetailRoute, request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var dbCategory = await Context.Categories.FirstAsync(x => x.Id == _firstTestCategory.Id);
+        dbCategory.Name.Should().Be(_firstTestCategory.Name);
+    }
+
+    // ---------- DELETE ----------
+
+    [Fact]
+    public async Task ShouldDeleteCategory()
+    {
+        // Act
+        var response = await Client.DeleteAsync(DetailRoute);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var exists = await Context.Categories
+            .AnyAsync(x => x.Id == _firstTestCategory.Id);
+
+        exists.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ShouldReturnNotFound_WhenDeletingNonExistingCategory()
+    {
+        // Arrange
+        var route = $"{BaseRoute}/{Guid.NewGuid()}";
+
+        // Act
+        var response = await Client.DeleteAsync(route);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    public async Task InitializeAsync()
+    {
+        await Context.Categories.AddAsync(_firstTestCategory);
+        await SaveChangesAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        Context.Categories.RemoveRange(Context.Categories);
+        await SaveChangesAsync();
     }
 }
